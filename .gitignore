@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+backend/node_modules/
+frontend/node_modules/
+
+# Database
+instance/
+*.db
+*.db.json
+*.sqlite
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Environment variables
+.env
+.env.local
+
+# Build outputs
+frontend/build/
+frontend/dist/
+frontend/public/
+dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Misc
+*.pem
+
