@@ -106,6 +106,22 @@ export const documentAPI = {
       headers: getAuthHeaders()
     });
     return response.data;
+  },
+
+  getShareRequests: async () => {
+    const response = await axios.get(`${API_BASE_URL}/share-requests`, {
+      headers: getAuthHeaders()
+    });
+    return response.data;
+  },
+
+  respondShareRequest: async (requestId, status) => {
+    const response = await axios.put(`${API_BASE_URL}/share-requests/${requestId}`, {
+      status
+    }, {
+      headers: getAuthHeaders()
+    });
+    return response.data;
   }
 };
 

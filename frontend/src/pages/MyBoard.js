@@ -6,10 +6,12 @@ import { fileToBase64, signData, encryptData, decryptData, loadPrivateKey, base6
 function MyBoard() {
   const [ownDocuments, setOwnDocuments] = useState([]);
   const [sharedDocuments, setSharedDocuments] = useState([]);
+  const [shareRequests, setShareRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [showUserListModal, setShowUserListModal] = useState(false);
+  const [showRequestsModal, setShowRequestsModal] = useState(false);
   const [selectedDocument, setSelectedDocument] = useState(null);
   const [users, setUsers] = useState([]);
   const [sharedUsers, setSharedUsers] = useState([]);
@@ -26,6 +28,7 @@ function MyBoard() {
   useEffect(() => {
     loadDocuments();
     loadUsers();
+    loadShareRequests();
   }, []);
 
   const loadDocuments = async () => {
@@ -46,6 +49,15 @@ function MyBoard() {
       setUsers(usersData.filter(u => u.id !== user.id));
     } catch (error) {
       console.error('Failed to load users:', error);
+    }
+  };
+
+  const loadShareRequests = async () => {
+    try {
+      const requests = await documentAPI.getShareRequests();
+      setShareRequests(requests);
+    } catch (error) {
+      console.error('Failed to load share requests:', error);
     }
   };
 
@@ -100,7 +112,7 @@ function MyBoard() {
     }
   };
 
-  const handleDownload = async (document) => {
+  const handleDownload = async (doc) => {
     try {
       // 개인키 로드
       const privateKey = loadPrivateKey(user.username);
@@ -110,11 +122,11 @@ function MyBoard() {
       }
 
       // 서버에서 암호화된 데이터 가져오기
-      const docDetail = await documentAPI.getDocument(document.id);
+      const docDetail = await documentAPI.getDocument(doc.id);
       
       // 공유받은 문서의 경우 재암호화된 데이터 사용
-      const encryptedData = document.relationship === 'shared' 
-        ? (document.encrypted_data_for_me || docDetail.encrypted_data)
+      const encryptedData = doc.relationship === 'shared' 
+        ? (doc.encrypted_data_for_me || docDetail.encrypted_data)
         : docDetail.encrypted_data;
 
       if (!encryptedData) {
@@ -132,12 +144,12 @@ function MyBoard() {
       // 다운로드
       const blob = base64ToBlob(decryptedData, 'application/octet-stream');
       const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
+      const a = window.document.createElement('a');
       a.href = url;
-      a.download = document.filename;
-      document.body.appendChild(a);
+      a.download = doc.filename;
+      window.document.body.appendChild(a);
       a.click();
-      document.body.removeChild(a);
+      window.document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Download error:', error);
@@ -214,6 +226,60 @@ function MyBoard() {
     }
   };
 
+  const handleAcceptRequest = async (request) => {
+    try {
+      // 개인키 로드
+      const privateKey = loadPrivateKey(user.username);
+      if (!privateKey) {
+        alert('개인키를 찾을 수 없습니다.');
+        return;
+      }
+
+      // 요청자 정보 가져오기
+      const requester = await authAPI.getUser(request.from_user_id);
+      if (!requester || !requester.public_key) {
+        alert('요청자 정보를 찾을 수 없습니다.');
+        return;
+      }
+
+      // 문서의 암호화된 데이터 가져오기
+      const docDetail = await documentAPI.getDocument(request.document_id);
+      
+      // 1. 내 개인키로 복호화
+      const decryptedData = decryptData(docDetail.encrypted_data, privateKey);
+      if (!decryptedData) {
+        alert('문서 복호화에 실패했습니다.');
+        return;
+      }
+
+      // 2. 요청자의 공개키로 재암호화
+      const reencryptedData = encryptData(decryptedData, requester.public_key);
+
+      // 3. 공유 처리
+      await documentAPI.shareDocument(request.document_id, request.from_user_id, reencryptedData);
+      
+      // 4. 요청 수락 처리
+      await documentAPI.respondShareRequest(request.id, 'accepted');
+      
+      alert('초대 요청을 수락했습니다!');
+      loadShareRequests();
+      loadDocuments();
+    } catch (error) {
+      console.error('Accept request error:', error);
+      alert('요청 수락에 실패했습니다: ' + (error.response?.data?.error || error.message));
+    }
+  };
+
+  const handleRejectRequest = async (requestId) => {
+    try {
+      await documentAPI.respondShareRequest(requestId, 'rejected');
+      alert('초대 요청을 거절했습니다.');
+      loadShareRequests();
+    } catch (error) {
+      alert('요청 거절에 실패했습니다.');
+    }
+  };
+
   if (loading) {
     return (
       <>
@@ -234,6 +300,15 @@ function MyBoard() {
         <div className="board-header">
           <h1>{user.username}'s Documents</h1>
           <p>내 문서와 공유받은 문서를 관리하세요</p>
+          {shareRequests.length > 0 && (
+            <button 
+              className="btn btn-primary" 
+              style={{ marginTop: '15px' }}
+              onClick={() => setShowRequestsModal(true)}
+            >
+              📬 초대 요청 ({shareRequests.length})
+            </button>
+          )}
         </div>
 
         <h2 style={{ color: 'white', marginBottom: '20px' }}>내 문서</h2>
@@ -398,6 +473,50 @@ function MyBoard() {
                 <button 
                   className="btn btn-secondary"
                   onClick={() => setShowUserListModal(false)}
+                >
+                  닫기
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 초대 요청 모달 */}
+        {showRequestsModal && (
+          <div className="modal-overlay" onClick={() => setShowRequestsModal(false)}>
+            <div className="modal" onClick={(e) => e.stopPropagation()}>
+              <h2>받은 초대 요청</h2>
+              {shareRequests.length === 0 ? (
+                <p>받은 초대 요청이 없습니다.</p>
+              ) : (
+                <ul className="user-list">
+                  {shareRequests.map(request => (
+                    <li key={request.id} className="user-item" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '10px' }}>
+                      <div>
+                        <strong>{request.requester_username}</strong>님이 <strong>{request.document_title}</strong> 문서에 대한 접근을 요청했습니다.
+                      </div>
+                      <div style={{ display: 'flex', gap: '10px' }}>
+                        <button 
+                          className="btn-small btn-share"
+                          onClick={() => handleAcceptRequest(request)}
+                        >
+                          ✓ 수락
+                        </button>
+                        <button 
+                          className="btn-small btn-delete"
+                          onClick={() => handleRejectRequest(request.id)}
+                        >
+                          ✗ 거절
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="modal-actions">
+                <button 
+                  className="btn btn-secondary"
+                  onClick={() => setShowRequestsModal(false)}
                 >
                   닫기
                 </button>

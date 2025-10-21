@@ -127,9 +127,15 @@ router.get('/documents/:id', (req, res) => {
     let encryptedData = '';
     if (isOwner) {
       // 소유자는 원본 파일 읽기
-      const filePath = path.join(uploadsDir, document.file_path);
-      if (fs.existsSync(filePath)) {
-        encryptedData = fs.readFileSync(filePath, 'utf8');
+      if (document.file_path) {
+        // 새 방식: 파일에서 읽기
+        const filePath = path.join(uploadsDir, document.file_path);
+        if (fs.existsSync(filePath)) {
+          encryptedData = fs.readFileSync(filePath, 'utf8');
+        }
+      } else if (document.encrypted_data) {
+        // 구 방식: DB에 직접 저장된 데이터 (하위 호환성)
+        encryptedData = document.encrypted_data;
       }
     } else {
       // 공유받은 사용자는 재암호화된 데이터 사용
@@ -385,6 +391,76 @@ router.post('/share-requests', (req, res) => {
   } catch (error) {
     console.error('Send share request error:', error);
     res.status(500).json({ error: 'Failed to send share request' });
+  }
+});
+
+// 내가 받은 공유 요청 조회
+router.get('/share-requests', (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // 내가 소유한 문서에 대한 pending 요청들
+    const myDocuments = db.get('documents')
+      .filter({ owner_id: userId })
+      .map(d => d.id)
+      .value();
+
+    const requests = db.get('share_requests')
+      .filter(r => myDocuments.includes(r.document_id) && r.status === 'pending')
+      .map(request => {
+        const doc = db.get('documents').find({ id: request.document_id }).value();
+        const requester = db.get('users').find({ id: request.from_user_id }).value();
+        return {
+          id: request.id,
+          document_id: request.document_id,
+          document_title: doc ? doc.title : 'Unknown',
+          from_user_id: request.from_user_id,
+          requester_username: requester ? requester.username : 'Unknown',
+          created_at: request.created_at
+        };
+      })
+      .value();
+
+    res.json(requests);
+  } catch (error) {
+    console.error('Get share requests error:', error);
+    res.status(500).json({ error: 'Failed to get share requests' });
+  }
+});
+
+// 공유 요청 응답 (수락/거절)
+router.put('/share-requests/:id', (req, res) => {
+  try {
+    const requestId = parseInt(req.params.id);
+    const { status } = req.body;
+    const userId = req.user.id;
+
+    if (!['accepted', 'rejected'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+
+    const request = db.get('share_requests').find({ id: requestId }).value();
+
+    if (!request) {
+      return res.status(404).json({ error: 'Request not found' });
+    }
+
+    // 문서 소유자 확인
+    const document = db.get('documents').find({ id: request.document_id }).value();
+    if (!document || document.owner_id !== userId) {
+      return res.status(403).json({ error: 'Only document owner can respond to requests' });
+    }
+
+    // 요청 상태 업데이트
+    db.get('share_requests')
+      .find({ id: requestId })
+      .assign({ status, updated_at: new Date().toISOString() })
+      .write();
+
+    res.json({ message: `Request ${status}` });
+  } catch (error) {
+    console.error('Respond share request error:', error);
+    res.status(500).json({ error: 'Failed to respond to request' });
   }
 });
 
