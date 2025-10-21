@@ -1,8 +1,17 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { authenticateToken } = require('../middleware/auth');
 
 const router = express.Router();
+
+// uploads 폴더 생성
+const uploadsDir = path.join(__dirname, '..', '..', 'instance', 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
 
 // 모든 라우트에 인증 미들웨어 적용
 router.use(authenticateToken);
@@ -18,7 +27,13 @@ router.get('/my-documents', (req, res) => {
       .map(doc => {
         const owner = db.get('users').find({ id: doc.owner_id }).value();
         return {
-          ...doc,
+          id: doc.id,
+          owner_id: doc.owner_id,
+          title: doc.title,
+          description: doc.description,
+          filename: doc.filename,
+          signature: doc.signature,
+          created_at: doc.created_at,
           owner_username: owner ? owner.username : 'Unknown',
           owner_public_key: owner ? owner.public_key : '',
           relationship: 'owner'
@@ -34,10 +49,17 @@ router.get('/my-documents', (req, res) => {
         if (!doc) return null;
         const owner = db.get('users').find({ id: doc.owner_id }).value();
         return {
-          ...doc,
+          id: doc.id,
+          owner_id: doc.owner_id,
+          title: doc.title,
+          description: doc.description,
+          filename: doc.filename,
+          signature: doc.signature,
+          created_at: doc.created_at,
           owner_username: owner ? owner.username : 'Unknown',
           owner_public_key: owner ? owner.public_key : '',
-          relationship: 'shared'
+          relationship: 'shared',
+          encrypted_data_for_me: share.encrypted_data_for_recipient // 받는 사람용 암호화 데이터
         };
       })
       .filter(doc => doc !== null)
@@ -77,7 +99,7 @@ router.get('/all-documents', (req, res) => {
   }
 });
 
-// 특정 문서 상세 조회
+// 특정 문서 상세 조회 (암호화된 데이터 포함)
 router.get('/documents/:id', (req, res) => {
   try {
     const documentId = parseInt(req.params.id);
@@ -91,18 +113,38 @@ router.get('/documents/:id', (req, res) => {
 
     // 권한 확인: 소유자이거나 공유받은 사용자인지
     const isOwner = document.owner_id === userId;
-    const isShared = db.get('document_shares')
+    const shareInfo = db.get('document_shares')
       .find({ document_id: documentId, shared_with_user_id: userId })
       .value();
 
-    if (!isOwner && !isShared) {
+    if (!isOwner && !shareInfo) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
     const owner = db.get('users').find({ id: document.owner_id }).value();
 
+    // 파일 읽기
+    let encryptedData = '';
+    if (isOwner) {
+      // 소유자는 원본 파일 읽기
+      const filePath = path.join(uploadsDir, document.file_path);
+      if (fs.existsSync(filePath)) {
+        encryptedData = fs.readFileSync(filePath, 'utf8');
+      }
+    } else {
+      // 공유받은 사용자는 재암호화된 데이터 사용
+      encryptedData = shareInfo.encrypted_data_for_recipient || '';
+    }
+
     res.json({
-      ...document,
+      id: document.id,
+      owner_id: document.owner_id,
+      title: document.title,
+      description: document.description,
+      filename: document.filename,
+      encrypted_data: encryptedData,
+      signature: document.signature,
+      created_at: document.created_at,
       owner_username: owner ? owner.username : 'Unknown',
       owner_public_key: owner ? owner.public_key : ''
     });
@@ -126,13 +168,19 @@ router.post('/documents', (req, res) => {
     const documents = db.get('documents').value();
     const newId = documents.length > 0 ? Math.max(...documents.map(d => d.id)) + 1 : 1;
 
+    // 파일을 uploads 폴더에 저장
+    const fileUuid = uuidv4();
+    const filePath = `${fileUuid}.enc`;
+    const fullPath = path.join(uploadsDir, filePath);
+    fs.writeFileSync(fullPath, encryptedData, 'utf8');
+
     const newDocument = {
       id: newId,
       owner_id: userId,
       title,
       description: description || '',
       filename,
-      encrypted_data: encryptedData,
+      file_path: filePath,  // 파일 경로만 저장
       signature,
       created_at: new Date().toISOString()
     };
@@ -149,12 +197,16 @@ router.post('/documents', (req, res) => {
   }
 });
 
-// 문서 공유 (초대)
+// 문서 공유 (초대) - 재암호화 데이터 포함
 router.post('/documents/:id/share', (req, res) => {
   try {
     const documentId = parseInt(req.params.id);
-    const { targetUserId } = req.body;
+    const { targetUserId, encryptedDataForRecipient } = req.body;
     const userId = req.user.id;
+
+    if (!encryptedDataForRecipient) {
+      return res.status(400).json({ error: 'Encrypted data for recipient is required' });
+    }
 
     // 문서 소유자 확인
     const document = db.get('documents').find({ id: documentId }).value();
@@ -180,12 +232,13 @@ router.post('/documents/:id/share', (req, res) => {
     const shares = db.get('document_shares').value();
     const newId = shares.length > 0 ? Math.max(...shares.map(s => s.id)) + 1 : 1;
 
-    // 공유 추가
+    // 공유 추가 (재암호화된 데이터 포함)
     const newShare = {
       id: newId,
       document_id: documentId,
       shared_with_user_id: targetUserId,
       shared_by_user_id: userId,
+      encrypted_data_for_recipient: encryptedDataForRecipient, // 받는 사람의 공개키로 암호화된 데이터
       created_at: new Date().toISOString()
     };
 
@@ -266,14 +319,14 @@ router.get('/documents/:id/shares', (req, res) => {
   }
 });
 
-// 공유 요청 보내기
+// 공유 요청 보내기 (일반 사용자가 문서 소유자에게 요청)
 router.post('/share-requests', (req, res) => {
   try {
-    const { documentId, toUserId } = req.body;
-    const fromUserId = req.user.id;
+    const { documentId } = req.body;
+    const fromUserId = req.user.id; // 요청을 보내는 사람 (일반 사용자)
 
-    if (!documentId || !toUserId) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    if (!documentId) {
+      return res.status(400).json({ error: 'Document ID is required' });
     }
 
     // 문서 존재 확인
@@ -283,9 +336,20 @@ router.post('/share-requests', (req, res) => {
       return res.status(404).json({ error: 'Document not found' });
     }
 
-    // 요청자가 문서 소유자인지 확인
-    if (document.owner_id !== fromUserId) {
-      return res.status(403).json({ error: 'Only owner can send share requests' });
+    const toUserId = document.owner_id; // 받는 사람 (문서 소유자)
+
+    // 본인 문서에는 요청 불가
+    if (document.owner_id === fromUserId) {
+      return res.status(400).json({ error: 'Cannot request access to your own document' });
+    }
+
+    // 이미 공유받은 문서인지 확인
+    const alreadyShared = db.get('document_shares')
+      .find({ document_id: documentId, shared_with_user_id: fromUserId })
+      .value();
+
+    if (alreadyShared) {
+      return res.status(409).json({ error: 'You already have access to this document' });
     }
 
     // 이미 요청이 있는지 확인

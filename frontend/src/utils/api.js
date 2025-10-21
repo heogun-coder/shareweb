@@ -74,9 +74,10 @@ export const documentAPI = {
     return response.data;
   },
 
-  shareDocument: async (documentId, targetUserId) => {
+  shareDocument: async (documentId, targetUserId, encryptedDataForRecipient) => {
     const response = await axios.post(`${API_BASE_URL}/documents/${documentId}/share`, {
-      targetUserId
+      targetUserId,
+      encryptedDataForRecipient
     }, {
       headers: getAuthHeaders()
     });
@@ -98,10 +99,9 @@ export const documentAPI = {
     return response.data;
   },
 
-  sendShareRequest: async (documentId, toUserId) => {
+  sendShareRequest: async (documentId) => {
     const response = await axios.post(`${API_BASE_URL}/share-requests`, {
-      documentId,
-      toUserId
+      documentId
     }, {
       headers: getAuthHeaders()
     });

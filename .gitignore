@@ -4,9 +4,9 @@ backend/node_modules/
 frontend/node_modules/
 
 # Database
-instance/
+instance/app.db.json
+instance/uploads/
 *.db
-*.db.json
 *.sqlite
 
 # Logs

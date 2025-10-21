@@ -23,10 +23,10 @@ function Dashboard() {
     }
   };
 
-  const handleRequestInvite = async (documentId, ownerId) => {
+  const handleRequestInvite = async (documentId) => {
     try {
-      await documentAPI.sendShareRequest(documentId, ownerId);
-      alert('초대 요청이 전송되었습니다!\n(현재 버전에서는 문서 소유자가 직접 공유해야 합니다)');
+      await documentAPI.sendShareRequest(documentId);
+      alert('초대 요청이 전송되었습니다!\n문서 소유자가 요청을 확인하면 공유됩니다.');
     } catch (error) {
       alert(error.response?.data?.error || '초대 요청에 실패했습니다.');
     }
@@ -75,7 +75,7 @@ function Dashboard() {
                 <div className="document-actions">
                   <button 
                     className="btn-small btn-share"
-                    onClick={() => handleRequestInvite(doc.id, doc.owner_id)}
+                    onClick={() => handleRequestInvite(doc.id)}
                   >
                     👤 초대 요청
                   </button>

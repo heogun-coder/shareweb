@@ -109,8 +109,21 @@ function MyBoard() {
         return;
       }
 
+      // 서버에서 암호화된 데이터 가져오기
+      const docDetail = await documentAPI.getDocument(document.id);
+      
+      // 공유받은 문서의 경우 재암호화된 데이터 사용
+      const encryptedData = document.relationship === 'shared' 
+        ? (document.encrypted_data_for_me || docDetail.encrypted_data)
+        : docDetail.encrypted_data;
+
+      if (!encryptedData) {
+        alert('암호화된 데이터를 찾을 수 없습니다.');
+        return;
+      }
+
       // 복호화
-      const decryptedData = decryptData(document.encrypted_data, privateKey);
+      const decryptedData = decryptData(encryptedData, privateKey);
       if (!decryptedData) {
         alert('문서 복호화에 실패했습니다.');
         return;
@@ -128,7 +141,7 @@ function MyBoard() {
       URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Download error:', error);
-      alert('문서 다운로드에 실패했습니다.');
+      alert('문서 다운로드에 실패했습니다: ' + (error.response?.data?.error || error.message));
     }
   };
 
@@ -139,11 +152,41 @@ function MyBoard() {
 
   const handleShare = async (targetUserId) => {
     try {
-      await documentAPI.shareDocument(selectedDocument.id, targetUserId);
+      // 개인키 로드
+      const privateKey = loadPrivateKey(user.username);
+      if (!privateKey) {
+        alert('개인키를 찾을 수 없습니다.');
+        return;
+      }
+
+      // 대상 사용자 정보 가져오기
+      const targetUser = await authAPI.getUser(targetUserId);
+      if (!targetUser || !targetUser.public_key) {
+        alert('대상 사용자 정보를 찾을 수 없습니다.');
+        return;
+      }
+
+      // 문서의 암호화된 데이터 가져오기
+      const docDetail = await documentAPI.getDocument(selectedDocument.id);
+      
+      // 1. 내 개인키로 복호화
+      const decryptedData = decryptData(docDetail.encrypted_data, privateKey);
+      if (!decryptedData) {
+        alert('문서 복호화에 실패했습니다.');
+        return;
+      }
+
+      // 2. 대상 사용자의 공개키로 재암호화
+      const reencryptedData = encryptData(decryptedData, targetUser.public_key);
+
+      // 3. 서버에 공유 (재암호화된 데이터 포함)
+      await documentAPI.shareDocument(selectedDocument.id, targetUserId, reencryptedData);
+      
       alert('문서가 성공적으로 공유되었습니다!');
       setShowShareModal(false);
       loadDocuments();
     } catch (error) {
+      console.error('Share error:', error);
       alert(error.response?.data?.error || '문서 공유에 실패했습니다.');
     }
   };
